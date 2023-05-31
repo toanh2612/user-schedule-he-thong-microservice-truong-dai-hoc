@@ -1,66 +1,84 @@
+import { Injectable, Logger, Scope } from "@nestjs/common";
 import { CONSTANT } from "src/common/untils/constant";
-const amqplib = require('amqplib');
+import EventEmitterService from "../eventEmitter/evenEmitter.service";
 
-class RabbitMQService {
-    private connect: any;
-    private channels: any;
-    constructor() {
-        if (!this.connect) {
-            this.init();
-        }
-
-        if (!this.channels) {
-            this.channels = {};
-        }
-        if (!this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.RECEIVE]) {
-            this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.RECEIVE] = {};
-        }
-
-        if (!this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.SEND]) {
-            this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.SEND] = {};
-        }
+const amqplib = require("amqplib");
+@Injectable({ scope: Scope.DEFAULT })
+export default class RabbitMQService {
+  private connect: any;
+  private channel: any;
+  constructor(private readonly eventEmitterService: EventEmitterService) {
+    if (!this.connect || !this.channel) {
+      this.init();
     }
+  }
 
-    async initChannel(mode: string, queue: string) {
-        if (!this.connect) {
-            await this.init();
-            throw new Error(CONSTANT.ERROR.E0005.message);
-        }
-
-        if (!this.channels[mode][queue]) {
-            this.channels[mode][queue] = await this.connect.createChannel();
-        }
+  async init() {
+    try {
+      const conn = await amqplib.connect(CONSTANT.RABBITMQ.CONNECTION_URL);
+      this.connect = conn;
+      this.channel = await conn.createChannel();
+      return conn;
+    } catch (error) {
+      setTimeout(() => {
+        this.init();
+        Logger.log("reconnect RabbitMQ");
+      }, 10000);
+      throw new Error(error);
     }
+  }
 
-    async receive(queue: string) {
-        await this.initChannel(CONSTANT.RABBITMQ.CHANNEL_TYPE.RECEIVE, queue);
-        this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.RECEIVE][queue].assertQueue(queue);
-        this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.RECEIVE][queue].consume(queue, (msg: any) => {
-            if (msg !== null) {
-            console.log(msg.content.toString());
-            this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.RECEIVE][queue].ack(msg);
-            }
-        });
+  async send(exChangeName, data: any) {
+    if (typeof data === "object") {
+      data = JSON.stringify(data);
     }
+    await this.channel.assertExchange(exChangeName, "fanout", {
+      durable: true,
+    });
+    await this.channel.publish(exChangeName, "", Buffer.from(data));
+  }
 
-    async send(queue, data: any) {
-        await this.initChannel(CONSTANT.RABBITMQ.CHANNEL_TYPE.SEND, queue);
-        if (typeof data === 'object') {
-            data = JSON.stringify(data);
-        }
-        this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.SEND][queue].assertQueue(queue);
-        this.channels[CONSTANT.RABBITMQ.CHANNEL_TYPE.SEND][queue].sendToQueue(queue, Buffer.from(data));
+  async sendToQueue(queue, data: any) {
+    if (typeof data === "object") {
+      data = JSON.stringify(data);
     }
+    this.channel.assertQueue(queue);
+    this.channel.sendToQueue(queue, Buffer.from(data), {
+      persistent: true,
+    });
+  }
 
-    async init () {
+  async receiver(exChangeName, queueNames) {
+    return await Promise.all(
+      queueNames.map((queueName) => {
         try {
-            const conn = await amqplib.connect('amqp://edu_microservice:edu_microservice%40@localhost');
-            this.connect = conn;
+          return new Promise(async (resolve, reject) => {
+            try {
+              await this.channel.assertExchange(exChangeName, "fanout", {
+                durable: true,
+              });
+
+              await this.channel.assertQueue(queueName);
+              await this.channel.bindQueue(queueName, exChangeName, "");
+              await this.channel.consume(queueName, async (msg: any) => {
+                if (msg && msg.content) {
+                  this.eventEmitterService.get().emit(queueName, {
+                    data: JSON.parse(msg.content.toString()),
+                    msg,
+                  });
+                }
+                await this.channel.ack(msg);
+              });
+
+              return resolve(queueName);
+            } catch (error) {
+              return reject(error);
+            }
+          });
         } catch (error) {
-            throw new Error(error);
+          throw new Error(error);
         }
-    }
-
+      })
+    );
+  }
 }
-
-export const rabbitMQIntance = new RabbitMQService();

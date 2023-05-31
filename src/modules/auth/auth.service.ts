@@ -26,7 +26,9 @@ export class AuthService {
     return new Promise(async (resolve, reject) => {
       try {
         if (!username && !email) {
-          throw new SystemError(CONSTANT.ERROR.E0001);
+          throw new SystemError(
+            CONSTANT.ERROR.USER.LOGIN.USERNAME_EMAIL_INVALID
+          );
         }
 
         const userFilter: any = {};
@@ -43,7 +45,8 @@ export class AuthService {
             .createQueryBuilder("user")
             .select("user")
             .addSelect("user.password")
-            .leftJoinAndSelect("user.role", "role");
+            .leftJoinAndSelect("user.role", "role")
+            .where("user.is_deleted = false");
 
         if (userFilter["username"]) {
           userQueryBuilder.andWhere("user.username = :username", {
@@ -58,7 +61,7 @@ export class AuthService {
         const userFound: IUser = await userQueryBuilder.getOne();
 
         if (!userFound) {
-          throw new SystemError(CONSTANT.ERROR.E0002);
+          throw new SystemError(CONSTANT.ERROR.USER.NOT_FOUND);
         }
 
         const comparePasswordResult = await bcrypt.compare(
@@ -84,7 +87,7 @@ export class AuthService {
             refreshToken,
           });
         } else {
-          throw new SystemError(CONSTANT.ERROR.E0003);
+          throw new SystemError(CONSTANT.ERROR.USER.LOGIN.PASSWORD_IS_WRONG);
         }
       } catch (error) {
         return reject(error);

@@ -10,331 +10,365 @@ const bcrypt = require("bcrypt");
 
 @Injectable()
 export default class UserService {
-	constructor(
-		@InjectDataSource()
-		private dataSource: DataSource
-	) {}
+  constructor(
+    @InjectDataSource()
+    private dataSource: DataSource
+  ) {}
 
-	async getList(
-		filter: any,
-		order: any,
-		page: number,
-		perPage: number,
-		filterOptions?: any
-	): Promise<any> {
-		return new Promise(async (resolve, reject) => {
-			try {
-				filterOptions = filterOptions || {};
-				const relativeFields: string[] = [];
+  async getList(
+    filter: any,
+    order: any,
+    page: number,
+    perPage: number,
+    filterOptions?: any
+  ): Promise<any> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        filterOptions = filterOptions || {};
+        const relativeFields: string[] = [];
 
-				let getUserListQuery = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.leftJoinAndSelect("user.role", "role")
-					.where("user.is_deleted = :isDeleted", { isDeleted: false })
-					.skip((page - 1) * perPage)
-					.take(perPage);
+        let getUserListQuery = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .leftJoinAndSelect("user.role", "role")
+          .where("user.is_deleted = :isDeleted", { isDeleted: false })
+          .skip((page - 1) * perPage)
+          .take(perPage);
 
-				getUserListQuery = addWhere(getUserListQuery, filter, relativeFields);
-				getUserListQuery = addOrderBy(getUserListQuery, order);
+        getUserListQuery = addWhere(getUserListQuery, filter, relativeFields);
+        getUserListQuery = addOrderBy(getUserListQuery, order);
 
-				const userFoundList: IUser[] = await getUserListQuery.getMany();
-				const userFoundCount: number = await getUserListQuery.getCount();
+        const userFoundList: IUser[] = await getUserListQuery.getMany();
+        const userFoundCount: number = await getUserListQuery.getCount();
 
-				return resolve({
-					result: userFoundList,
-					paging: {
-						page,
-						perPage,
-						total: userFoundCount,
-					},
-				});
-			} catch (error) {
-				return reject(error);
-			}
-		});
-	}
+        return resolve({
+          result: userFoundList,
+          paging: {
+            page,
+            perPage,
+            total: userFoundCount,
+          },
+        });
+      } catch (error) {
+        return reject(error);
+      }
+    });
+  }
 
-	async getOne(id: string): Promise<any> {
-		return new Promise(async (resolve, reject) => {
-			try {
-				const userFound: IUser = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.leftJoinAndSelect("user.role", "role")
-					.where("user.id = :userId", {
-						userId: id,
-					})
-					.andWhere("user.isDeleted = false")
-					.getOne();
+  async getOne(id: string): Promise<any> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const userFound: IUser = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .leftJoinAndSelect("user.role", "role")
+          .where("user.id = :userId", {
+            userId: id,
+          })
+          .andWhere("user.isDeleted = false")
+          .getOne();
 
-				return resolve({
-					result: userFound,
-				});
-			} catch (error) {
-				return reject(error);
-			}
-		});
-	}
+        return resolve({
+          result: userFound,
+        });
+      } catch (error) {
+        return reject(error);
+      }
+    });
+  }
 
-	async create(createUserData: any): Promise<any> {
-		const queryRunner = this.dataSource.createQueryRunner();
-		await queryRunner.connect();
-		await queryRunner.startTransaction();
-		return new Promise(async (resovle, reject) => {
-			try {
-				createUserData.password = await bcrypt.hash(createUserData.password, 3);
+  async create(createUserData: any): Promise<any> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    return new Promise(async (resovle, reject) => {
+      try {
+        const { username, email } = createUserData;
+        const userFilter: any = {};
 
-				let newUserData = await queryRunner.manager
-					.getRepository(UserEntity)
-					.create(createUserData);
+        if (username) {
+          userFilter["username"] = username;
+        } else if (email) {
+          userFilter["email"] = email;
+        }
 
-				const newUserDataSave: any = await queryRunner.manager
-					.getRepository(UserEntity)
-					.save(newUserData);
+        const userQueryBuilder: SelectQueryBuilder<UserEntity> =
+          await this.dataSource.manager
+            .getRepository(UserEntity)
+            .createQueryBuilder("user")
+            .select("user")
+            .addSelect("user.password")
+            .leftJoinAndSelect("user.role", "role")
+            .where("user.is_deleted = false");
 
-				await queryRunner.commitTransaction();
-				await queryRunner.release();
+        if (userFilter["username"]) {
+          userQueryBuilder.andWhere("user.username = :username", {
+            username: userFilter["username"],
+          });
+        } else if (userFilter["email"]) {
+          userQueryBuilder.andWhere("user.email = :email", {
+            email: userFilter["email"],
+          });
+        }
 
-				const newUserFound = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: newUserDataSave.id,
-					})
-					.andWhere("user.is_deleted = false")
-					.orderBy("user.created_date", "DESC")
-					.getOne();
+        const userFound: IUser = await userQueryBuilder.getOne();
 
-				return resovle({
-					result: newUserFound,
-				});
-			} catch (error) {
-				await queryRunner.rollbackTransaction();
-				await queryRunner.release();
+        if (userFound) {
+          throw new SystemError(CONSTANT.ERROR.USER.USER_ALREADY_EXISTS);
+        }
 
-				return reject(error);
-			}
-		});
-	}
+        createUserData.password = await bcrypt.hash(createUserData.password, 3);
 
-	async update(id: string, updateUserData: any): Promise<any> {
-		const queryRunner = this.dataSource.createQueryRunner();
-		await queryRunner.connect();
-		await queryRunner.startTransaction();
-		return new Promise(async (resovle, reject) => {
-			try {
-				let userFound = await queryRunner.manager
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: id,
-					})
-					.andWhere("user.is_deleted = false")
-					.getOne();
+        let newUserData = await queryRunner.manager
+          .getRepository(UserEntity)
+          .create(createUserData);
 
-				if (!userFound) {
-					throw new SystemError(CONSTANT.ERROR.E0002);
-				}
+        const newUserDataSave: any = await queryRunner.manager
+          .getRepository(UserEntity)
+          .save(newUserData);
 
-				await queryRunner.manager
-					.getRepository(UserEntity)
-					.createQueryBuilder()
-					.update(UserEntity)
-					.set(updateUserData)
-					.where("id = :id", { id: userFound.id })
-					.execute();
+        await queryRunner.commitTransaction();
+        await queryRunner.release();
 
-				await queryRunner.commitTransaction();
-				await queryRunner.release();
+        const newUserFound = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: newUserDataSave.id,
+          })
+          .andWhere("user.is_deleted = false")
+          .orderBy("user.created_date", "DESC")
+          .getOne();
 
-				userFound = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: userFound.id,
-					})
-					.andWhere("user.is_deleted = false")
-					.getOne();
+        return resovle({
+          result: newUserFound,
+        });
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        await queryRunner.release();
 
-				return resovle({
-					result: userFound,
-				});
-			} catch (error) {
-				await queryRunner.rollbackTransaction();
-				await queryRunner.release();
+        return reject(error);
+      }
+    });
+  }
 
-				return reject(error);
-			}
-		});
-	}
+  async update(id: string, updateUserData: any): Promise<any> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    return new Promise(async (resovle, reject) => {
+      try {
+        let userFound = await queryRunner.manager
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: id,
+          })
+          .andWhere("user.is_deleted = false")
+          .getOne();
 
-	async changePassword(id: string, passwordData: any): Promise<any> {
-		const queryRunner = this.dataSource.createQueryRunner();
-		await queryRunner.connect();
-		await queryRunner.startTransaction();
-		return new Promise(async (resovle, reject) => {
-			try {
-				let userFound = await queryRunner.manager
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: id,
-					})
-					.andWhere("user.is_deleted = false")
-					.getOne();
+        if (!userFound) {
+          throw new SystemError(CONSTANT.ERROR.USER.NOT_FOUND);
+        }
 
-				let { newPassword, oldPassword } = passwordData;
+        await queryRunner.manager
+          .getRepository(UserEntity)
+          .createQueryBuilder()
+          .update(UserEntity)
+          .set(updateUserData)
+          .where("id = :id", { id: userFound.id })
+          .execute();
 
-				if (!userFound) {
-					throw new SystemError(CONSTANT.ERROR.E0002);
-				}
+        await queryRunner.commitTransaction();
+        await queryRunner.release();
 
-				const compareOldPasswordResult = await bcrypt.compare(
-					oldPassword,
-					userFound.password
-				);
+        userFound = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: userFound.id,
+          })
+          .andWhere("user.is_deleted = false")
+          .getOne();
 
-				if (compareOldPasswordResult) {
-					throw new SystemError(CONSTANT.ERROR.E0003);
-				}
+        return resovle({
+          result: userFound,
+        });
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        await queryRunner.release();
 
-				newPassword = await bcrypt.hash(newPassword, 3);
+        return reject(error);
+      }
+    });
+  }
 
-				await queryRunner.manager
-					.getRepository(UserEntity)
-					.createQueryBuilder()
-					.update(UserEntity)
-					.set({
-						password: newPassword,
-					})
-					.where("id = :id", { id: userFound.id })
-					.execute();
+  async changePassword(id: string, passwordData: any): Promise<any> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    return new Promise(async (resovle, reject) => {
+      try {
+        let userFound = await queryRunner.manager
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: id,
+          })
+          .andWhere("user.is_deleted = false")
+          .getOne();
 
-				await queryRunner.commitTransaction();
-				await queryRunner.release();
+        let { newPassword, oldPassword } = passwordData;
 
-				userFound = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: userFound.id,
-					})
-					.andWhere("user.is_deleted = false")
-					.getOne();
+        if (!userFound) {
+          throw new SystemError(CONSTANT.ERROR.USER.NOT_FOUND);
+        }
 
-				return resovle({
-					result: userFound,
-				});
-			} catch (error) {
-				await queryRunner.rollbackTransaction();
-				await queryRunner.release();
+        const compareOldPasswordResult = await bcrypt.compare(
+          oldPassword,
+          userFound.password
+        );
 
-				return reject(error);
-			}
-		});
-	}
+        if (compareOldPasswordResult) {
+          throw new SystemError(CONSTANT.ERROR.USER.LOGIN.PASSWORD_IS_WRONG);
+        }
 
-	async delete(id: string): Promise<any> {
-		const queryRunner = this.dataSource.createQueryRunner();
-		await queryRunner.connect();
-		await queryRunner.startTransaction();
-		return new Promise(async (resovle, reject) => {
-			try {
-				let userFound = await queryRunner.manager
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: id,
-					})
-					.andWhere("user.is_deleted = false")
-					.getOne();
+        newPassword = await bcrypt.hash(newPassword, 3);
 
-				if (!userFound) {
-					return reject({
-						code: "",
-						message: "",
-					});
-				}
+        await queryRunner.manager
+          .getRepository(UserEntity)
+          .createQueryBuilder()
+          .update(UserEntity)
+          .set({
+            password: newPassword,
+          })
+          .where("id = :id", { id: userFound.id })
+          .execute();
 
-				await queryRunner.manager
-					.getRepository(UserEntity)
-					.createQueryBuilder()
-					.update(UserEntity)
-					.set({
-						isDeleted: true,
-					})
-					.where("id = :id", { id: userFound.id })
-					.execute();
+        await queryRunner.commitTransaction();
+        await queryRunner.release();
 
-				await queryRunner.commitTransaction();
-				await queryRunner.release();
+        userFound = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: userFound.id,
+          })
+          .andWhere("user.is_deleted = false")
+          .getOne();
 
-				userFound = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.where("user.id = :id", {
-						id: userFound.id,
-					})
-					.andWhere("user.is_deleted = false")
-					.getOne();
+        return resovle({
+          result: userFound,
+        });
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        await queryRunner.release();
 
-				return resovle({
-					result: userFound,
-				});
-			} catch (error) {
-				await queryRunner.rollbackTransaction();
-				await queryRunner.release();
+        return reject(error);
+      }
+    });
+  }
 
-				return reject(error);
-			}
-		});
-	}
+  async delete(id: string): Promise<any> {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    return new Promise(async (resovle, reject) => {
+      try {
+        let userFound = await queryRunner.manager
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: id,
+          })
+          .andWhere("user.is_deleted = false")
+          .getOne();
 
-	getOneById(id: string): Promise<any> {
-		return new Promise(async (resolve, reject) => {
-			try {
-				const userFound: IUser = await this.dataSource
-					.getRepository(UserEntity)
-					.createQueryBuilder("user")
-					.leftJoinAndSelect("user.role", "role")
-					.where("user.id = :userId", {
-						userId: id,
-					})
-					.andWhere("user.isDeleted = false")
-					.getOne();
+        if (!userFound) {
+          return reject({
+            code: "",
+            message: "",
+          });
+        }
 
-				return resolve({
-					result: userFound,
-				});
-			} catch (error) {
-				return reject(error);
-			}
-		});
-	}
+        await queryRunner.manager
+          .getRepository(UserEntity)
+          .createQueryBuilder()
+          .update(UserEntity)
+          .set({
+            isDeleted: true,
+          })
+          .where("id = :id", { id: userFound.id })
+          .execute();
 
-	getListByIds(ids: string[]): Promise<any> {
-		return new Promise(async (resolve, reject) => {
-			try {
-				const userFoundListQuery: SelectQueryBuilder<UserEntity> =
-					await this.dataSource
-						.getRepository(UserEntity)
-						.createQueryBuilder("user");
-				if (ids && ids.length) {
-					userFoundListQuery.where("user.id IN (:...userIds)", {
-						userIds: ids,
-					});
-				} else {
-					return reject();
-				}
-				const userFoundList: IUser[] = await userFoundListQuery.getMany();
+        await queryRunner.commitTransaction();
+        await queryRunner.release();
 
-				return resolve({
-					result: userFoundList,
-				});
-			} catch (error) {
-				return reject(error);
-			}
-		});
-	}
+        userFound = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .where("user.id = :id", {
+            id: userFound.id,
+          })
+          .andWhere("user.is_deleted = false")
+          .getOne();
+
+        return resovle({
+          result: userFound,
+        });
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        await queryRunner.release();
+
+        return reject(error);
+      }
+    });
+  }
+
+  getOneById(id: string): Promise<any> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const userFound: IUser = await this.dataSource
+          .getRepository(UserEntity)
+          .createQueryBuilder("user")
+          .leftJoinAndSelect("user.role", "role")
+          .where("user.id = :userId", {
+            userId: id,
+          })
+          .andWhere("user.isDeleted = false")
+          .getOne();
+
+        return resolve({
+          result: userFound,
+        });
+      } catch (error) {
+        return reject(error);
+      }
+    });
+  }
+
+  getListByIds(ids: string[]): Promise<any> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const userFoundListQuery: SelectQueryBuilder<UserEntity> =
+          await this.dataSource
+            .getRepository(UserEntity)
+            .createQueryBuilder("user");
+        if (ids && ids.length) {
+          userFoundListQuery.where("user.id IN (:...userIds)", {
+            userIds: ids,
+          });
+        } else {
+          return reject();
+        }
+        const userFoundList: IUser[] = await userFoundListQuery.getMany();
+
+        return resolve({
+          result: userFoundList,
+        });
+      } catch (error) {
+        return reject(error);
+      }
+    });
+  }
 }

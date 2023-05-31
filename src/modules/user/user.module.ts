@@ -7,6 +7,8 @@ import { userEventHandler } from "./eventHandlers/userEvent.handler";
 import { UserController } from "./user.controller";
 import UserService from "./user.service";
 import { AuthService } from "../auth/auth.service";
+import EventEmitterService from "../eventEmitter/evenEmitter.service";
+import RabbitMQService from "../rabbitMQ/rabbitMQ.service";
 
 @Module({
   imports: [
@@ -27,7 +29,7 @@ import { AuthService } from "../auth/auth.service";
     TypeOrmModule.forFeature([UserEntity]),
   ],
   controllers: [UserController, userEventHandler],
-  providers: [UserService, AuthService],
+  providers: [UserService, AuthService, EventEmitterService, RabbitMQService],
 })
 export class UserModule implements NestModule {
   constructor() {}
